@@ -49,7 +49,7 @@ for j in range(100):
     # Normal noise is another kind of noise that may be implicit in the sensor;
     # measurement
 
-    normal = np.random.normal(0, 2, 1000)
+    normal = np.random.normal(0, .5, 1000)
     bernouli = 5*np.sign(np.random.rand(1000)-.5)*np.random.binomial(1, 1/100, 1000)/1
     marks = np.where(abs(bernouli) > 0)
     marksL.append(marks[0])
@@ -65,13 +65,14 @@ for j in range(100):
 
     A = [(1-.5)*np.random.rand() + .5, 1, .4, .2] # amplitude at each harmonic
 
-    # Uncomment if you want to simulate a sinusoidal artifact
     activation = np.random.rand()
     sinusAct = np.array([0 for i in range(300)] + [activation for i in range(400)] + [0 for i in range(300)])
     # Convolve with gaussian to smooth transition and multiply by sinusoid.
     # Assume sinusoid freq is 2Hz (within band of interested HR freqs). We should add the freq to the
     # parameters we're optimizing for in the posterior if it is also dynamic
-    sinusAct = 10*np.sin([2*np.pi*i*2/100 for i in range(1000)])*np.convolve(sinusAct, gauss, 'same')/10
+
+    # Uncomment if you want to simulate a sinusoidal artifact
+    sinusAct = np.sin([2*np.pi*i*2/100 for i in range(1000)])*np.convolve(sinusAct, gauss, 'same') + np.random.normal(0,1,1000)
     activityprior = np.array([0 for i in range(300)] + [1 for i in range(400)] + [0 for i in range(300)], dtype=float)
     activityprior *= 10*np.sin([2*np.pi*i*2/100 for i in range(1000)])
     # Components of pulse; sinusoid with harmonics with phase shifts. Looks like
@@ -80,17 +81,17 @@ for j in range(100):
     B += A[0]*np.sin([2*np.pi*i*freq2*1/100 for i in range(1000)])
     B += A[2]*np.sin([2*np.pi*i*2*freq*1/100 + 2*phase for i in range(1000)])
     B += A[3]*np.sin([2*np.pi*i*3*freq*1/100 + 4*phase for i in range(1000)])
-    nonoise = B + sinusAct
+    nonoise = B# + sinusAct
     nonoisesample.append(nonoise)
-    noise = B+ bernouliandnormal + sinusAct
+    noise = B+ bernouliandnormal# + sinusAct
     noisedsamples.append(noise)
 
     # Initial state should be 0 or randomly initialized. I choose 0
-    noisefix = np.hstack(([0 for i in range(40)], noise))
+    noisefix = np.hstack(([0 for i in range(20)], noise))
 
     # Fixing observation matrix for OLS AR Model
-    observe = np.array([noisefix[i:i+40] for i in range(len(noisefix)-40)])
-    nextobs = noisefix[40:]
+    observe = np.array([noisefix[i:i+20] for i in range(len(noisefix)-20)])
+    nextobs = noisefix[20:]
     observs.append(observe)
     labs.append(nextobs)
 
@@ -106,11 +107,11 @@ for j in range(100):
 
 
     ### See how well the autoregressive model can predict next points ###
-    previousstate = noise[-40:]
+    previousstate = noise[-20:]
     out = []
     variance = np.std(denoised - noise)
 
-    for i in range(1000):
+    for i in range(2000):
         out.append(W.dot(previousstate))
         previousstate[:-1] = previousstate[1:]
         previousstate[-1] = out[-1] + np.random.normal(0,variance)
@@ -118,7 +119,7 @@ for j in range(100):
     #plt.show()
 
 nobs = len(observs)
-for j in range(2000):
+for j in range(1000):
     # MCMC Annealing part. W sampled from normal. sample <= 32 observs to
     # optimize posterior. Helps a lot with computational overhead. One hopes
     # such a q(W) converges to the real posterior. Use OLS estimate of first
@@ -129,44 +130,66 @@ for j in range(2000):
         var2 = 0 # Old posterior estimate
         var3 = 0 # Candidate posterior estimate
         # Sample only part of observations dist once sample size gets very large
-        if nobs > 32:
-            p = np.random.permutation(nobs)[:32]
+        if nobs > 100:
+            p = np.random.permutation(nobs)[:100]
         else:
             p = np.random.permutation(nobs)
         # Candidate to update posterior expectation
         candidateW = oldW + np.random.normal(0,sigmaMCMC,len(oldW))
-        for obs,noi,ac in zip(np.array(observs)[p],np.array(labs)[p], np.array(accData)[p]):
+        for obs,y,ac in zip(np.array(observs)[p],np.array(labs)[p], np.array(accData)[p]):
 
             # If marginalizing activation out of likelihood, we should perform
             # an EM like algorithm. First optimize q(W|Artifact), update W, then
             # optimize q(W|Activation)
 
-            for k in range(2):
+            for k in range(1):
                 # Noise added to error to avoid overfitting
+                # P(Y|X,W) = N(XW,sigma_a)
+                # P(Artifact) = N(0,sigma_b)
+                # P(Activation) = N(0, sigma_c)
+                # P(B) = N(0, sigma_MCMC)
+# P(W|Y,X,Artifact,Activation)  ~ P(Y|X,W)P(Artifact)P(Activation)P(B)
+# P(W|Y,X,Artifact,Activation)  ~ 1/(2pisigma_a**2)*exp(-sum(y-XW)/(2sigma_a))*1/(2pisigma_b**2) * exp(-sum(artifact)/(2sigma_b)) *1/(2pisigma_c**2) * exp(-sum(activation)/(2sigma_c))
+
+                # Evaluate Old Posterior
                 oldexp = obs.dot(oldW.T)
-                var2 += np.std((oldexp - noi + np.random.normal(0,sigmawhite,1000)))
-                standold = oldexp#(oldexp - oldexp.mean())/oldexp.std()
+                covobs = oldexp.dot(y.T)
+                covac = oldexp.dot(ac.T)
+                covact = oldexp.dot(activityprior.T)
+
                 if k == 0:
-                    var2 += np.std((oldexp - sigmaAc*ac))
+                    var2 += np.exp(-np.sum((y - oldexp)**2)/covobs - \
+                            np.sum(ac**2)/covac)
                 else:
-                    var2 += np.std((oldexp - sigmasinusAct*activityprior))
+                    var2 += np.exp(-np.sum((y - oldexp)**2)/covobs - \
+                            np.sum(activityprior**2)/covact)
+
+                # Evaluate Candidate
                 candidateexp = obs.dot(candidateW.T)
-                var3 += np.std((candidateexp - noi + np.random.normal(0,sigmawhite,1000)))
+                candcovobs = candidateexp.dot(y.T)
+                candcovac = candidateexp.dot(ac.T)
+                candcovact = candidateexp.dot(activityprior.T)
+
                 if k == 0:
-                    var3 += np.std((candidateexp - sigmaAc*ac))
+                    var3 += np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
+                        np.sum(ac**2)/candcovac)
                 else:
-                    var3 += np.std((candidateexp - sigmasinusAct*activityprior))
+                    var3 += np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
+                            np.sum(activityprior**2)/candcovact)
                 print(j, var3/var2, end='\r')
+
+        # See if new posterior is more probable
         if 1 > var3/var2:
             # Update posterior estimate
             oldW = candidateW
             variance = var3
+            print()
             print(j,"Changed!")
         # Annealing
-        if j % 200== 0 and i != 0:
-            sigmaMCMC /= 10
+        if j % 100== 0 and i != 0:
             sigmawhite /= 2
-        if j % 300 == 0 and i != 0:
+            sigmaMCMC /= 5
+        if j % 500 == 0 and i != 0:
             sigmaAc /= 2
             sigmasinusAct /= 2
 
@@ -178,7 +201,7 @@ Wsig = np.std(Beta[900:],0)
 ### Let's see how well we did.
 time = [i*1/100 for i in range(1000)]
 freqsfft = np.fft.fftfreq(1000, d=1/100)
-for i in range(len(nonoisesample)-100,len(nonoisesample)):
+for i in range(30):
     var = np.std(observs[i].dot(oldW.T) - noisedsamples[i])
     oreslist = []
     reslist = []
@@ -206,7 +229,7 @@ for i in range(len(nonoisesample)-100,len(nonoisesample)):
     for m in marksL[i]:
         ax[0].axvline(x=m/100, color='g', alpha=.3)
     ax[0].set_ylabel("A.U")
-    ax[0].legend(["Real + Nuisance Sinusoidal Activity", "Bayes Filtering"])
+    ax[0].legend(["Real", "Bayes Filtering"])
     ax[1].plot(time, noisedsamples[i])
     ax[1].plot(time, res)
 #    ax[1].fill_between(time, res+resstd, res-resstd, color="orange", alpha=.5)
@@ -222,18 +245,20 @@ for i in range(len(nonoisesample)-100,len(nonoisesample)):
         ax[2].axvline(x=m/100, color='g', alpha=.3)
     ax[2].legend(["AR Denoised", "Bayes Filtering"])
     ax[2].set_xlabel("Time (seconds)")
-    plt.figure()
+    fig2 = plt.figure()
 
     plt.plot(freqsfft, abs(np.fft.fft(nonoisesample[i])))
     plt.plot(freqsfft, abs(np.fft.fft(res)), '--')
-    plt.figure()
-
-    initialstate = res[-40:] + np.random.normal(0,var,40)
-    out = []
-    for j in range(1000):
-        out.append(initialstate.dot(oldW.T))
-        initialstate[:-1] = initialstate[1:]
-        initialstate[-1] = out[-1] + np.random.normal(0,var)
-    plt.plot(time, out)
+#    plt.figure()
+#
+### Evaluate Forecasting Capacity###
+#    initialstate = res[-100:] + np.random.normal(0,var,100)
+#    out = []
+#    for j in range(1000):
+#        out.append(initialstate.dot(oldW.T))
+#        initialstate[:-1] = initialstate[1:]
+#        initialstate[-1] = out[-1] + np.random.normal(0,var)
+#    plt.plot(time, out)
     fig.savefig("Generated_{0:d}.png".format(i), dpi=1200)
     plt.close(fig)
+    plt.close(fig2)
