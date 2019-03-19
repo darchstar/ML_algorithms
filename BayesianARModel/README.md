@@ -1,7 +1,37 @@
 # Bayesian AR Model
 
+[Simulations](#simulation)
+
+[AR Model](#armodel)
+
+[Bayesian Optimization of AR Model](#bayesopt)
+
+[Kalman Filter](#kalman)
+
+[Results](#results)
+
+[Potential Improvements](#improvements)
+
+## Simulation <a name="simulation"/>
+
 Here, I simulate a pulsatile signal that is similar to what one may see in
-diffuse optics signals at 100Hz. I also simulate two types of noise added to the signal.
+diffuse optics signals at 100Hz. The equations that govern this pulse (i.e.
+hemodynamic activity) is generally a control of the heart pumping blood through
+the arteries. So the dominant frequency is the heart rate. Given Poiseuille
+flow, we also have harmonics with lower amplitudes. Finally, there is a dampened
+amplitude at the respiration rate, caused by the diaphragm expanding and
+imputing negative pressure on the superior and inferior vena cava so that venous
+return can occur.
+
+This behavior can be illustrated using a Fourier series
+
+<img src="https://latex.codecogs.com/gif.latex?PPG(t)&space;=&space;a_rsin(2&space;\pi&space;f_r&space;t&space;&plus;&space;\phi_r)&space;&plus;&space;\sum_{i=1}^{\inf}a_{h_i}&space;sin(2&space;\pi&space;f_{h_i}&space;t&space;&plus;&space;\phi_{h_i})" title="PPG(t) = a_rsin(2 \pi f_r t + \phi_r) + \sum_{i=1}^{\inf}a_{h_i} sin(2 \pi f_{h_i} t + \phi_{h_i})" />
+
+And the typical signal can look like this:
+
+<img src="images/PPG.png" title="PPG" />
+
+I also simulate two types of noise added to the signal.
 One type of noise is implicit sensor noise sampled from a normal distribution:
 
 <img src="https://latex.codecogs.com/gif.latex?\epsilon_m&space;=&space;\mathcal{N}(0,&space;\sigma_m)" title="\epsilon_m = \mathcal{N}(0, \sigma_m)" />
@@ -17,15 +47,19 @@ normal distribution.
 The following image is an example of such movement that is added to the noise,
 along with the accelerometer data.
 
-<img src="MovementArtifact.png" title="Artifacts" />
+<img src="images/MovementArtifact.png" title="Artifacts" />
+
+
+## AR Model <a name="armodel"/>
 
 The AR Model is then defined as such:
 
-<img src="https://latex.codecogs.com/gif.latex?\sum{x_{t-i}&space;b_{t-i}}&space;=&space;\epsilon_m&space;&plus;&space;\epsilon_a" title="\sum{x_{t-i} b_{t-i}} = \epsilon_m + \epsilon_a" />
+<img src="https://latex.codecogs.com/gif.latex?\sum{x_{t-i}&space;w_{t-i}}&space;=&space;\epsilon_m&space;&plus;&space;\epsilon_a" title="\sum{x_{t-i} w_{t-i}} = \epsilon_m + \epsilon_a" />
 
 Pretty much, it's an infinite response filter whose inputs are gaussian noise +
  bernoulli process.
 
+## Bayesian Optimization of AR Model <a name="bayesopt"/>
 The objective of a Bayesian filter is to find the optimal posterior
 distribution, i.e.
 
@@ -54,7 +88,7 @@ model (w&#x0302;).
 
 To obtain the optimal weights of the AR model given artifacts, we perform a Markov Chain Monte
 Carlo and expectation maximization. The weights are sampled from a distribution with deviation
-&sigma;<sub>w</sub>, whose initial values. If this candidate weight gives a more likely posterior
+&sigma;<sub>w</sub>. If this candidate weight gives a more likely posterior
 distribution than the old weights, we update the old weights with the candidate.
 To avoid getting stuck in a mode, we anneal the variance that we sample the
 weights from. Covariance of each distribution is calculated as a dot product
@@ -65,6 +99,8 @@ with prior knowledge encoded in the parameters that describe its dynamics.
 Normal ordinary least squares does not have this knowledge encoded in it. This
 allows for this model to be used later in the absence of any extra sensors like
 an accelerometer.
+
+## Kalman Filter <a name="kalman"/>
 
 However, if we do have an accelerometer during the acquisition, we can in fact do
 better than this Bayesian filter. To do this, we incorporate the accelerometer data
@@ -89,10 +125,12 @@ where z<sub>k</sub> is information on how we update our model.
 In practice, this would look like this. First we determine the covariance of our
 AR model with our accelerometer sensor data. Assuming zero mean, it's the dot
 product of our AR model outputs with the acceleration data
-(XB)(accel)<sup>T</sup>. We use this to determine the probability of actually
+(XW)(accel)<sup>T</sup>. We use this to determine the probability of actually
 having an artifact:
 
 <img src="https://latex.codecogs.com/gif.latex?p(Artifact)&space;=&space;\frac{1}{\sqrt{2\Sigma_{R}\pi}}e^{-\frac{\sum_{i=1}^{N}{acc_i}^2}{2\Sigma_{R}}}" title="p(Artifact) = \frac{1}{\sqrt{2\Sigma_{R}\pi}}e^{-\frac{\sum_{i=1}^{N}{acc_i}^2}{2\Sigma_{R}}}" />
+
+Where N is the order of our AR Model.
 
 From there, we can determine the dynamics of the previous state to the next
 state using this probability as a gain factor:
@@ -102,13 +140,13 @@ state using this probability as a gain factor:
 x<sub>t</sub> is used for the next time step of the Kalman filter until the end
 of the time course.
 
+## Results <a name="results"/>
 Below, I show an example of results of these filter; Green vertical lines mark
 where we sampled a motion artifact:
 
-<img src="Generated_6.png" title="Results" />
+<img src="images/Generated_13.png" title="Results" />
 
-The top plot shows the bayesian filter (Red unfiltered; Green low pass filtered
-[cutoff = 15Hz]) compared to the true signal (Blue). The middle
+The top plot shows the bayesian filter (Green) and Kalman filter (Orange) compared to the true signal (Blue). The middle
 plot shows the bayesian filter compared to the observed signal with noise. The
 third plot shows the bayesian filter compared to the AR model optimized via
 ordinary least squares, i.e. log likelihood maximized for the distribution
@@ -124,6 +162,8 @@ Comparing the Bayesian filter to the Kalman filter, though, we see the Kalman
 does a way better job of tracking the true output of the physiological signal.
 Also, it does not suffer from the overregularization issue that the Bayesian
 encoded AR model did.
+
+## Potential Improvements <a name="improvements"/>
 
 Improvements to this algorithm can include mapping our feature set of the AR
 model to a different feature space, e.g. using a gaussian radial basis function
