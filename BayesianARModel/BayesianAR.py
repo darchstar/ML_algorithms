@@ -16,13 +16,11 @@ Beta = []
 marksL = []
 old = 0
 b,a = signal.butter(3, 15/50, 'lowpass')
+oldW = []
 
-# Hyperparameters: like variation of parameter estimate and Acceleration data
+# Hyperparameter: like variation of parameter estimate and Acceleration data
 # These hyperparameters will be annealed during MCMC optimization
-sigmaMCMC = 0.01
-sigmawhite = 0.1
-sigmaAc = 1
-sigmasinusAct = 1
+sigmaMCMC = .01
 
 # Bayesian Learning
 # Sample data | noise, i.e. Y|Artifact,W
@@ -38,7 +36,7 @@ sigmasinusAct = 1
 # RBF can be considered, for example. Or any other nonlinear feature transform.
 
 # Sample observations
-for j in range(100):
+for j in range(200):
     freq = ((100-40)*np.random.rand()+40)/60 # heart rate at random plausible freq
     freq2 = 12/60 # respiration rate
     phase = 2*np.pi*np.random.rand()*freq # phase component random | freq
@@ -72,9 +70,9 @@ for j in range(100):
     # parameters we're optimizing for in the posterior if it is also dynamic
 
     # Uncomment if you want to simulate a sinusoidal artifact
-    sinusAct = np.sin([2*np.pi*i*2/100 for i in range(1000)])*np.convolve(sinusAct, gauss, 'same') + np.random.normal(0,1,1000)
+    sinusAct = 10*signal.sawtooth([2*np.pi*i*.5/100 for i in range(1000)])*sinusAct+ np.random.normal(0,1,1000)
     activityprior = np.array([0 for i in range(300)] + [1 for i in range(400)] + [0 for i in range(300)], dtype=float)
-    activityprior *= 10*np.sin([2*np.pi*i*2/100 for i in range(1000)])
+    activityprior *= signal.sawtooth([2*np.pi*i*.5/100 for i in range(1000)])
     # Components of pulse; sinusoid with harmonics with phase shifts. Looks like
     # Pulsatile Photoplethysmogram. Noise also observed.
     B = A[1]*np.sin([2*np.pi*i*freq*1/100 + phase for i in range(1000)])
@@ -83,7 +81,7 @@ for j in range(100):
     B += A[3]*np.sin([2*np.pi*i*3*freq*1/100 + 4*phase for i in range(1000)])
     nonoise = B# + sinusAct
     nonoisesample.append(nonoise)
-    noise = B+ bernouliandnormal# + sinusAct
+    noise = B + bernouliandnormal# + sinusAct
     noisedsamples.append(noise)
 
     # Initial state should be 0 or randomly initialized. I choose 0
@@ -111,7 +109,7 @@ for j in range(100):
     out = []
     variance = np.std(denoised - noise)
 
-    for i in range(2000):
+    for i in range(200):
         out.append(W.dot(previousstate))
         previousstate[:-1] = previousstate[1:]
         previousstate[-1] = out[-1] + np.random.normal(0,variance)
@@ -127,71 +125,78 @@ for j in range(1000):
     if j == 0:
         oldW = W
     else:
-        var2 = 0 # Old posterior estimate
-        var3 = 0 # Candidate posterior estimate
+        pOld = 0 # Old posterior estimate
+        pCandidate = 0 # Candidate posterior estimate
         # Sample only part of observations dist once sample size gets very large
         if nobs > 100:
             p = np.random.permutation(nobs)[:100]
         else:
             p = np.random.permutation(nobs)
         # Candidate to update posterior expectation
-        candidateW = oldW + np.random.normal(0,sigmaMCMC,len(oldW))
-        for obs,y,ac in zip(np.array(observs)[p],np.array(labs)[p], np.array(accData)[p]):
+
+        for k in range(1):
+
+            candidateW = oldW + np.random.normal(0,sigmaMCMC,len(oldW))
+            for obs,y,ac in zip(np.array(observs)[p],np.array(labs)[p], np.array(accData)[p]):
 
             # If marginalizing activation out of likelihood, we should perform
             # an EM like algorithm. First optimize q(W|Artifact), update W, then
             # optimize q(W|Activation)
 
-            for k in range(1):
-                # Noise added to error to avoid overfitting
-                # P(Y|X,W) = N(XW,sigma_a)
-                # P(Artifact) = N(0,sigma_b)
-                # P(Activation) = N(0, sigma_c)
-                # P(B) = N(0, sigma_MCMC)
+            # P(Y|X,W) = N(XW,sigma_a)
+            # P(Artifact) = N(0,sigma_b)
+            # P(Activation) = N(0, sigma_c)
+            # P(B) = N(0, sigma_MCMC)
 # P(W|Y,X,Artifact,Activation)  ~ P(Y|X,W)P(Artifact)P(Activation)P(B)
 # P(W|Y,X,Artifact,Activation)  ~ 1/(2pisigma_a**2)*exp(-sum(y-XW)/(2sigma_a))*1/(2pisigma_b**2) * exp(-sum(artifact)/(2sigma_b)) *1/(2pisigma_c**2) * exp(-sum(activation)/(2sigma_c))
 
                 # Evaluate Old Posterior
                 oldexp = obs.dot(oldW.T)
-                covobs = oldexp.dot(y.T)
-                covac = oldexp.dot(ac.T)
-                covact = oldexp.dot(activityprior.T)
+                covobs = 2*(oldexp - oldexp.mean()).dot((y-y.mean()).T)
+                covac = 2*(oldexp - oldexp.mean()).dot((ac - ac.mean()).T)
+                covact = 2*(oldexp - oldexp.mean()).dot((activityprior -\
+                    activityprior.mean()).T)
 
                 if k == 0:
-                    var2 += np.exp(-np.sum((y - oldexp)**2)/covobs - \
-                            np.sum(ac**2)/covac)
+                    pOld += 1/(covobs/2*np.sqrt(2*np.pi))*np.exp(-np.sum((y - oldexp)**2)/covobs)* \
+                            (1-1/(covac/2*np.sqrt(2*np.pi))*np.exp(-np.sum(ac**2)/covac))# * \
+        #                    (1-1/(covact/2*np.sqrt(2*np.pi))*np.exp(-np.sum(activityprior**2)/covact))
                 else:
-                    var2 += np.exp(-np.sum((y - oldexp)**2)/covobs - \
-                            np.sum(activityprior**2)/covact)
+                    pOld += 1/(covobs/2*np.sqrt(2*np.pi))*np.exp(-np.sum((y - oldexp)**2)/covobs)* \
+                            (1-1/(covact/2*np.sqrt(2*np.pi))*np.exp(-np.sum(activityprior**2)/covact))
+        #                    (1-1/(covac/2*np.sqrt(2*np.pi))*np.exp(-np.sum(ac**2)/covac))# * \
 
                 # Evaluate Candidate
                 candidateexp = obs.dot(candidateW.T)
-                candcovobs = candidateexp.dot(y.T)
-                candcovac = candidateexp.dot(ac.T)
-                candcovact = candidateexp.dot(activityprior.T)
+                candcovobs = 2*(candidateexp - candidateexp.mean()).dot((y -\
+                    y.mean()).T)
+                candcovac = 2*(candidateexp - candidateexp.mean()).dot((ac - ac.mean()).T)
+                candcovact = 2*(candidateexp -\
+                        candidateexp.mean()).dot((activityprior - activityprior.mean()).T)
 
                 if k == 0:
-                    var3 += np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
-                        np.sum(ac**2)/candcovac)
+                    pCandidate += 1/(candcovobs/2*np.sqrt(2*np.pi))*np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
+                        np.sum((candidateW - oldW)**2)/oldW.dot(candidateW.T)) *\
+                        (1-1/(candcovac/2*np.sqrt(2*np.pi))*np.exp(-np.sum(ac**2)/candcovac))# * \
+    #                (1-1/(candcovact/2*np.sqrt(2*np.pi))*np.exp(-np.sum(activityprior**2)/candcovact))
                 else:
-                    var3 += np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
-                            np.sum(activityprior**2)/candcovact)
-                print(j, var3/var2, end='\r')
+                    pCandidate += 1/(candcovobs/2*np.sqrt(2*np.pi))*np.exp(-np.sum((y - candidateexp)**2)/candcovobs - \
+                        np.sum((candidateW - oldW)**2)/oldW.dot(candidateW.T)) *\
+                        (1-1/(candcovact/2*np.sqrt(2*np.pi))*np.exp(-np.sum(activityprior**2)/candcovact))
+    #                    (1-1/(candcovac/2*np.sqrt(2*np.pi))*np.exp(-np.sum(ac**2)/candcovac))# * \
 
-        # See if new posterior is more probable
-        if 1 > var3/var2:
-            # Update posterior estimate
-            oldW = candidateW
-            variance = var3
-            print()
-            print(j,"Changed!")
+                print(j, pCandidate/pOld, end='\r')
+
+            # See if new posterior is more probable
+            if pCandidate/pOld > 1:
+                # Update posterior estimate
+                oldW = candidateW
+                variance = pCandidate
+                print()
+                print(j,"Changed!")
         # Annealing
-        if j % 100== 0 and i != 0:
-            sigmawhite /= 2
+        if j % 700== 0 and i != 0:
             sigmaMCMC /= 5
-        if j % 500 == 0 and i != 0:
-            sigmaAc /= 2
-            sigmasinusAct /= 2
 
         Beta.append(oldW)
 
@@ -220,45 +225,43 @@ for i in range(30):
     ores = observs[i].dot(oldW.T)
     res = signal.filtfilt(b,a,ores)
 
-    fig, ax = plt.subplots(3,1)
+    fig, ax = plt.subplots(4,1)
     ax = ax.ravel()
-    ax[0].plot(time, nonoisesample[i])
+    ax[0].plot(time, nonoisesample[i], label="Real")
     ax[0].plot(time, res)
 #    ax[0].fill_between(time, res+resstd, res-resstd, color="orange", alpha=.5)
-    ax[0].plot(time, ores,alpha=.5)
+    ax[0].plot(time, ores,alpha=.5, label="Bayes Filter")
     for m in marksL[i]:
         ax[0].axvline(x=m/100, color='g', alpha=.3)
     ax[0].set_ylabel("A.U")
-    ax[0].legend(["Real", "Bayes Filtering"])
-    ax[1].plot(time, noisedsamples[i])
+    ax[1].plot(time, noisedsamples[i], label="Noised")
     ax[1].plot(time, res)
 #    ax[1].fill_between(time, res+resstd, res-resstd, color="orange", alpha=.5)
-    ax[1].plot(time, ores,alpha=.5)
+    ax[1].plot(time, ores,alpha=.5, label="Bayes Filter")
     for m in marksL[i]:
         ax[1].axvline(x=m/100, color='g', alpha=.3)
-    ax[1].legend(["Noised", "Bayes Filtering"])
-    ax[2].plot(time, denoisedsamples[i])
+    ax[2].plot(time, denoisedsamples[i], label="AR Denoised")
     ax[2].plot(time, res)
 #    ax[2].fill_between(time, res+resstd, res-resstd, color="orange", alpha=.5)
-    ax[2].plot(time, ores,alpha=.5)
+    ax[2].plot(time, ores,alpha=.5, label="Bayes Filter")
     for m in marksL[i]:
         ax[2].axvline(x=m/100, color='g', alpha=.3)
-    ax[2].legend(["AR Denoised", "Bayes Filtering"])
     ax[2].set_xlabel("Time (seconds)")
-    fig2 = plt.figure()
+    kalman = [denoisedsamples[i][len(oldW)-1]]
+    for k in range(len(oldW), len(noisedsamples[i])):
+        xk = denoisedsamples[i][k]
+        covac = denoisedsamples[i][k-len(oldW):k].dot(accData[i][k-len(oldW):k])
+        ac = accData[i][k-len(oldW):k]
+        pArt = (1/(np.sqrt(abs(covac))*np.sqrt(2*np.pi))*np.exp(-np.sum(ac**2)/(2*abs(covac))))
+        direction = np.sign(np.mean(ac))
+        kalman.append(pArt*(xk-kalman[-1]) + kalman[-1])
+    ax[3].plot(time[len(oldW)-1:], kalman, label="Kalman")
+    ax[3].plot(time[len(oldW)-1:], nonoisesample[i][len(oldW)-1:], label="Real")
+    ax[3].plot(time[len(oldW)-1:], ores[len(oldW)-1:], label="Bayes")
 
-    plt.plot(freqsfft, abs(np.fft.fft(nonoisesample[i])))
-    plt.plot(freqsfft, abs(np.fft.fft(res)), '--')
-#    plt.figure()
-#
-### Evaluate Forecasting Capacity###
-#    initialstate = res[-100:] + np.random.normal(0,var,100)
-#    out = []
-#    for j in range(1000):
-#        out.append(initialstate.dot(oldW.T))
-#        initialstate[:-1] = initialstate[1:]
-#        initialstate[-1] = out[-1] + np.random.normal(0,var)
-#    plt.plot(time, out)
-    fig.savefig("Generated_{0:d}.png".format(i), dpi=1200)
+    for axx in ax:
+        axx.legend(bbox_to_anchor=(1.1,1.05), fancybox=True, framealpha=0.5)
+
+    fig.savefig("Generated_{0:d}.png".format(i), dpi=500)
     plt.close(fig)
-    plt.close(fig2)
+
