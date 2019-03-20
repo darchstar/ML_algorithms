@@ -18,7 +18,7 @@ Here, I simulate a pulsatile signal that is similar to what one may see in
 diffuse optics signals at 100Hz. The equations that govern this pulse (i.e.
 hemodynamic activity) is generally a control of the heart pumping blood through
 the arteries. So the dominant frequency is the heart rate. Given Poiseuille
-flow, we also have harmonics with lower amplitudes. Finally, there is a dampened
+flow and atrial valve closing, we also have harmonics with lower amplitudes. Finally, there is a dampened
 amplitude at the respiration rate, caused by the diaphragm expanding and
 imputing negative pressure on the superior and inferior vena cava so that venous
 return can occur.
@@ -114,6 +114,9 @@ Essentially, it looks like this:
 
 Where F<sub>k</sub> is our AR model, and B is a mapping for our acceleration
 information, i.e. control. This works to tell us the certainty of our model.
+This idea can be extended to nonlinear transforms as follows:
+
+<img src="https://latex.codecogs.com/gif.latex?x_k&space;=&space;F(x_{k-1}&space;&plus;&space;u_k)&space;&plus;&space;\epsilon_R" title="x_k = F(x_{k-1} + u_k) + \epsilon_R" />
 
 Once we find this prediction for our state, we will correct our prediction based
 on what we finally observe, i.e. what our sensors measure.
