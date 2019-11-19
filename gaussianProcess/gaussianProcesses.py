@@ -12,10 +12,10 @@ class GP():
     def gaussianKernelDensity(data, sigma=1):
         p = np.zeros(len(data), dtype=np.float64)
         # Subset estimation with select.
-        select = np.random.permutation(len(data))[:1000]
-        for d in range(data[select]):
+#        select = np.random.permutation(len(data))[:1000]
+        for d in range(data):
             p += 1/(np.sqrt(2*np.pi)*sigma)*np.exp(-(data-d)**2/(2*sigma**2))
-        return p/data[select].size
+        return p/data.size
 
     @staticmethod 
     @nb.njit(fastmath=True,parallel=True)
@@ -50,9 +50,10 @@ class GP():
         dcmat = np.zeros((len(b), len(a)),dtype=np.float64)
         rationing = np.array([ld for i in range(a.shape[1])], dtype=np.float64)
         for i in range(len(b)):
-            r = np.sqrt(np.sum((a - b[i])**2/rationing,1))
-            dcmat[i,:] = np.sqrt(5)*-np.sqrt(5)*np.exp(-np.sqrt(5)*r) +\
-    2*r*5/3*-np.sqrt(5)*np.exp(-np.sqrt(5)*r)
+            r = np.sqrt(np.sum((a - b[i])**2,1))
+            dcmat[i,:] = (-np.sqrt(5)*r/ld**2 -2*5*r**2/ld**3)*np.exp(-np.sqrt(5)*r/ld)
+            dcmat[i,:] = dcmat[i,:] + (1+ np.sqrt(5)*r/ld +\
+                    5*r**2/ld**2)*np.exp(-np.sqrt(5)*r/ld)*np.sqrt(5)*r/ld**2
         return dcmat
 
     @staticmethod
@@ -95,15 +96,13 @@ class GP():
             cmat[i,:] = -1/(2*ld)*np.exp(-r**2/(2*ld))*1/(2*r)
         return cmat
     
-    @staticmethod
-    @nb.njit(fastmath=True,parallel=True)
-    def WienerKernel(a, b, ld=3):
+    def WienerKernel(self,a, b, ld=3.):
         cmat = np.zeros((len(b), len(a)), dtype=np.float64)
-        rationing = np.array([np.std(a[:,0])*ld, np.std(a[:,1])*3], dtype=np.float64)
         for i in range(len(b)):
-            r = np.minimum(a, b[i])/rationing
-            cmat[i,:] = r
-        return cmat
+            tempb = np.array(np.sqrt(np.sum(b[i]**2)))
+            tempa = np.sqrt(np.sum(a**2,1))
+            cmat[i,:] = np.min((tempb.repeat(len(tempa)),tempa),0)
+        return cmat/cmat.max()
 
     def optimizeHyperparms(self, data, inp, lr=.001, ld=1., sigma=1., noise=.1, niter=100):
         data = data-data.mean(0)
